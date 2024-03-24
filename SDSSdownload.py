@@ -74,11 +74,11 @@ class Image:
                 wcs = WCS(self.hdus[i][0][0])
                 cut = Cutout2D(self.image_list[i],self.pos,image_size*u.pixel,wcs)
                 cutout.append(cut.data)
-
-            cutout_reshaped = np.zeros((image_size, image_size, 3))
-            for k in range(3):
-                for i in range(image_size):
-                    for j in range(image_size):
+            a,b,c = cutout.shape
+            cutout_reshaped = np.zeros((b, c, a))
+            for k in range(a):
+                for i in range(b):
+                    for j in range(c):
                         cutout_reshaped[i,j,k] = cutout[k][i,j]
             self.cutout = cutout_reshaped
         return self.cutout
