@@ -74,11 +74,15 @@ class Image:
                 wcs = WCS(self.hdus[i][0][0])
                 cut = Cutout2D(self.image_list[i],self.pos,image_size*u.pixel,wcs)
                 cutout.append(cut.data)
-            a,b,c = cutout.shape
-            cutout_reshaped = np.zeros((b, c, a))
-            for k in range(a):
-                for i in range(b):
-                    for j in range(c):
+
+            # truncate cutout to dimensions of smallest, in case near edge of field
+            len_a = min(len(cutout[0]), len(cutout[1]), len(cutout[2]))
+            len_b = min(len(cutout[0][0]), len(cutout[1][0]), len(cutout[2][0]))
+            
+            cutout_reshaped = np.zeros((len_a, len_b, 3))
+            for k in range(3):
+                for i in range(len_a):
+                    for j in range(len_b):
                         cutout_reshaped[i,j,k] = cutout[k][i,j]
             self.cutout = cutout_reshaped
         return self.cutout
