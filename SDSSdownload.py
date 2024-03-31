@@ -12,7 +12,6 @@ from astropy.nddata import Cutout2D
 from astropy.visualization import make_lupton_rgb
 import pandas as pd
 import os
-import astrocut
 
 def size_from_z(p90,z,box_scale=2.5):
     """
