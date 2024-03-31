@@ -105,11 +105,13 @@ class Image:
 
             hdu = fits.open(filename)[0]
             wcs = WCS(hdu.header)
-
-            if wcs.footprint_contains(self.pos) == False:
-                self.on_chip = 0
                 
-            cutout = Cutout2D(hdu.data, position=self.pos, size=size, wcs=wcs, mode='partial', fill_value=0.0)
+            try:
+                cutout = Cutout2D(hdu.data, position=self.pos, size=size, wcs=wcs, mode='strict')
+            except:
+                cutout = Cutout2D(hdu.data, position=self.pos, size=size, wcs=wcs, mode='partial', fill_value=0.0)
+                self.on_plate = 0
+                
             hdu.data = cutout.data
         
             hdu.header.update(cutout.wcs.to_header())
