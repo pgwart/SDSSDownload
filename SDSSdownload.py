@@ -21,6 +21,8 @@ def size_from_z(p90,z,box_scale=2.5):
     z: Redshift
     box_scale: Size of box relative to angular diameter
     """
+    if p90 == 999999.0:
+        return 151*u.pixel
     z = z*cu.redshift
     d = z.to(u.parsec, cu.with_redshift())
     s = 1000*p90*u.parsec
