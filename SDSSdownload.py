@@ -4,14 +4,32 @@ from matplotlib.patches import Rectangle
 from astroquery.sdss import SDSS
 from astropy import coordinates as coords
 import astropy.units as u
+import astropy.cosmology.units as cu
+u.add_enabled_units(cu)  
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.nddata import Cutout2D
 from astropy.visualization import make_lupton_rgb
+import pandas as pd
+import os
+import astrocut
 
-
+def size_from_z(p90,z,box_scale=2.5):
+    """
+    Finds image size for a galaxy.
+    p90: Petrosian R90
+    z: Redshift
+    box_scale: Size of box relative to angular diameter
+    """
+    z = z*cu.redshift
+    d = z.to(u.parsec, cu.with_redshift())
+    s = 1000*p90*u.parsec
+    radius = (s/d)*u.rad
+    diameter = 2*radius
+    return diameter*box_scale
+    
 class Image:
-    def __init__(self, ra, dec, search_radius=5*u.arcsec, bands=['i','r','g'], image_dir='./images/', data_dir='./data/'):
+    def __init__(self, ra, dec, df_path, search_radius=5*u.arcsec, bands=['r'], data_dir='./data/', show_progress=False):
         # If no units given for coords, assume degrees
         if type(ra) is u.quantity.Quantity:
             self.ra = ra
@@ -21,162 +39,157 @@ class Image:
             self.dec = dec
         else:
             self.dec = dec*u.deg
+
+        # Default image size = 151 pixels
+        self.size = 151
+
+        # Flag for whether the image is on the plate
+        self.on_plate = 1
+
+        # Get coordinates and SDSS ID
         self.pos = coords.SkyCoord(ra=self.ra, dec=self.dec)
         self.id = SDSS.query_region(self.pos, radius=5*u.arcsec)
-        self.objid = self.id[0]['objid']
+        
+        # Find search result that matches one of our SDSS galaxies
+        # else, use the first result
+        self.index = 0
+        df = pd.read_csv(df_path)
+        IDs = [id for id in df['objID']]
+        for i,objid in enumerate(self.id['objid']):
+            if objid in IDs:
+                self.index = i
+        self.objid = self.id[self.index]['objid']
+        df_cut = df[df['objID'] == self.objid]
+
+        # Get rid of DataFrame to save memory (hopefully?)
+        del df
 
         # Set filter bands
         # Ensure that there are 3 bands
         # and that they are ugriz
         ugriz = ['u','g','r','i','z']
         self.bands = bands
-        if len(self.bands) != 3:
-            print('Must select 3 bands.\n')
-            print('Using default bands (i, r, g).')
-            self.bands = ['i', 'r', 'g']
         valid = True
-        for band in self.bands:
-            if band not in ugriz:
-                valid = False
-        if valid == False:
-            print('Must select only ugriz filter bands.')
-            print('Using default bands (i, r, g).')
-            self.bands = ['i', 'r', 'g']
-        self.dir = image_dir
+        if bands == 'all':
+            self.bands = ugriz
+        else:
+            for band in self.bands:
+                if band not in ugriz:
+                    valid = False
+            if valid == False:
+                print('Must select only ugriz filter bands.')
+                print('Using default band (r).')
+                self.bands = ['r']
+            
         self.data_dir = data_dir
+        self.gal_dir = data_dir + f'{self.objid}/'
         
-        self.hdus = []
-        image_list = []
+        if not os.path.exists(self.gal_dir):
+            os.makedirs(self.gal_dir)
+        
         for band in self.bands:
-            hdu = SDSS.get_images(matches=self.id, band=band)
-            self.hdus.append(hdu)
-            image_list.append(hdu[0][0].data)
-            
-        xx = len(image_list[0])
-        yy = len(image_list[0][0])
+            hdu = SDSS.get_images(matches=self.id, band=band, show_progress=show_progress)
+            hdu[0].writeto(self.gal_dir + 'plate_' + band + '.fits', overwrite=True)
+
+    def cutout(self, size=None):
+        if size == None:
+            size = self.size
+        if type(size) == int:
+            if size%2 == 0:
+                print('For best results, use odd pixel size.')
+            size = size*u.pixel
+        for band in self.bands:
+            filename = self.gal_dir + 'plate_' + band + '.fits'
+            #cut = astrocut.fits_cut(self.gal_dir + f'plate_' + band + '.fits', self.pos, cutout_size=size, memory_only=True)
+            #cut[0].writeto(self.gal_dir + 'cutout_' + band + '.fits', overwrite=True)
+
+            hdu = fits.open(filename)[0]
+            wcs = WCS(hdu.header)
+
+            if wcs.footprint_contains(self.pos) == False:
+                self.on_chip = 0
+                
+            cutout = Cutout2D(hdu.data, position=self.pos, size=size, wcs=wcs, mode='partial', fill_value=0.0)
+            hdu.data = cutout.data
         
-        image = np.zeros((xx,yy,3))
-        for k in range(3):
-            for i in range(len(image_list[k])):
-                for j in range(len(image_list[k][i])):
-                    image[i,j,k] = image_list[k][i,j]
+            hdu.header.update(cutout.wcs.to_header())
+            cutout_filename = self.gal_dir + 'cutout_' + band + '.fits'
+            hdu.writeto(cutout_filename, overwrite=True)
+
+    def plot_cutout(self, band=None, save=False):
+        if band == None:
+            band = self.bands[0]
+        with fits.open(self.gal_dir + 'cutout_' + band + '.fits') as hdu:
+            plt.axis('off')
+            fig = plt.imshow(hdu[0].data, norm="log", cmap="binary", origin="lower")
+            if save:
+                fig.axes.get_xaxis().set_visible(False)
+                fig.axes.get_yaxis().set_visible(False)
+                plt.savefig(self.gal_dir + 'cutout_' + band + '.png', bbox_inches='tight', pad_inches=0)
+                
+    def save_plot(self, band=None):
+        if band == None:
+            band = self.bands[0]
+        with fits.open(self.gal_dir + 'cutout_' + band + '.fits') as hdu:
+            plt.axis('off')
+            fig = plt.imshow(hdu[0].data, norm="log", cmap="binary", origin="lower")
+            fig.axes.get_xaxis().set_visible(False)
+            fig.axes.get_yaxis().set_visible(False)
+            plt.savefig(self.gal_dir + 'cutout_' + band + '.png', bbox_inches='tight', pad_inches=0)
+            plt.close()
+
+    def plot_cutout_color(self, red='r', green='g', blue='u', Q=10, stretch=0.5, save=False):
+        with fits.open(self.gal_dir + 'cutout_' + red + '.fits') as red_hdu:
+            with fits.open(self.gal_dir + 'cutout_' + green + '.fits') as green_hdu:
+                with fits.open(self.gal_dir + 'cutout_' + blue + '.fits') as blue_hdu:
+                    data = [red_hdu[0].data, green_hdu[0].data, blue_hdu[0].data]
+                    axes = []
+                    for array in data:
+                        i,j = np.shape(array)
+                        axes.append(i)
+                        axes.append(j)
+                    length = min(axes)
+                    reshaped = np.zeros((length, length, 3))
+                    for k in range(3):
+                        for i in range(length):
+                            for j in range(length):
+                                reshaped[i,j,k] = data[k][i,j]
+                    image = make_lupton_rgb(reshaped[:,:,0],reshaped[:,:,1],reshaped[:,:,2], Q=Q, stretch=stretch)
+
+                    plt.axis('off')
+                    fig = plt.imshow(image, origin='lower')
+                    if save:
+                        fig.axes.get_xaxis().set_visible(False)
+                        fig.axes.get_yaxis().set_visible(False)
+                        plt.savefig(self.gal_dir + 'cutout_color.png', bbox_inches='tight', pad_inches=0)
+
+    def save_cutout_color(self, red='r', green='g', blue='u', Q=10, stretch=0.5, save=False):
+        with fits.open(self.gal_dir + 'cutout_' + red + '.fits') as red_hdu:
+            with fits.open(self.gal_dir + 'cutout_' + green + '.fits') as green_hdu:
+                with fits.open(self.gal_dir + 'cutout_' + blue + '.fits') as blue_hdu:
+                    data = [red_hdu[0].data, green_hdu[0].data, blue_hdu[0].data]
+                    axes = []
+                    for array in data:
+                        i,j = np.shape(array)
+                        axes.append(i)
+                        axes.append(j)
+                    length = min(axes)
+                    reshaped = np.zeros((length, length, 3))
+                    for k in range(3):
+                        for i in range(length):
+                            for j in range(length):
+                                reshaped[i,j,k] = data[k][i,j]
+                    image = make_lupton_rgb(reshaped[:,:,0],reshaped[:,:,1],reshaped[:,:,2], Q=Q, stretch=stretch)
+
+                    plt.axis('off')
+                    fig = plt.imshow(image, origin='lower')
+                    fig.axes.get_xaxis().set_visible(False)
+                    fig.axes.get_yaxis().set_visible(False)
+                    plt.savefig(self.gal_dir + 'cutout_color.png', bbox_inches='tight', pad_inches=0)
+                    plt.close()
                     
-        self.image_list = image_list
-        self.image = image
-        self.cutout = []
-        self.image_size = 0
 
-    def data(self, image_size=151):
-        if image_size != self.image_size:
-            self.image_size=image_size
-            cutout = []
-            for i in range(len(self.bands)):
-                wcs = WCS(self.hdus[i][0][0])
-                cut = Cutout2D(self.image_list[i],self.pos,image_size*u.pixel,wcs)
-                cutout.append(cut.data)
-
-            # truncate cutout to dimensions of smallest, in case near edge of field
-            len_a = min(len(cutout[0]), len(cutout[1]), len(cutout[2]))
-            len_b = min(len(cutout[0][0]), len(cutout[1][0]), len(cutout[2][0]))
+    def save_all(self):
+        for band in self.bands:
+            self.save_plot(band=band)
             
-            cutout_reshaped = np.zeros((len_a, len_b, 3))
-            for k in range(3):
-                for i in range(len_a):
-                    for j in range(len_b):
-                        cutout_reshaped[i,j,k] = cutout[k][i,j]
-            self.cutout = cutout_reshaped
-        return self.cutout
-
-    def plot(self, filter='r'):
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        if filter==self.bands[0]:
-            i = 0
-        if filter==self.bands[1]:
-            i = 1
-        if filter==self.bands[2]:
-            i = 2
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        image = self.cutout[:,:,i]
-        plt.imshow(image, norm="log", cmap="binary", origin="lower")
-        
-    def plot_color(self, Q=10, stretch=0.5):
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        lupton = make_lupton_rgb(self.cutout[:,:,0], self.cutout[:,:,1], self.cutout[:,:,2], Q=Q, stretch=stretch)
-        plt.imshow(lupton, origin='lower')
-          
-    def region_data(self):
-        return self.image
-
-    def plot_region(self, filter='r', box=False):
-        if filter==self.bands[0]:
-            i = 0
-        if filter==self.bands[1]:
-            i = 1
-        if filter==self.bands[2]:
-            i = 2
-        plt.imshow(self.image[:,:,i], norm="log", cmap="binary", origin="lower")
-        if box:
-            wcs = WCS(self.hdus[i][0][0])
-            x,y = wcs.world_to_pixel(self.pos)
-            plt.gca().add_patch(Rectangle((x-75,y-75),151,151,edgecolor='r', fill=False))
-
-    def plot_region_color(self, Q=10, strech=0.5, box=False):
-        lupton = make_lupton_rgb(self.image[:,:,0], self.image[:,:,1], self.image[:,:,2], Q=Q, stretch=strech)
-        plt.imshow(lupton, origin='lower')
-        if box:
-            wcs = WCS(self.hdus[0][0][0])
-            x,y = wcs.world_to_pixel(self.pos)
-            plt.gca().add_patch(Rectangle((x-75,y-75),151,151,edgecolor='r', fill=False))
-
-    def save_plot(self, filter='r', dir=None):
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        if dir:
-            self.dir = dir
-        self.plot(filter=filter)
-        plt.axis("off")
-        plt.savefig(self.dir + f'{self.objid}.png')
-        plt.close()
-
-    def save_plot_region(self, filter='r', dir=None):
-        if dir:
-            self.dir = dir
-        self.plot_region(filter=filter)
-        plt.axis("off")
-        plt.savefig(self.dir + f'{self.objid}.png')
-        plt.close()
-
-    def save_plot_color(self, cutout=True, Q=10, stretch=0.5, dir=None):
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        if dir:
-            self.dir = dir
-        self.plot_color(Q=Q, stretch=stretch)
-        plt.axis("off")
-        plt.box(False)
-        plt.savefig(self.dir + f'{self.objid}.png')
-        plt.close()
-
-    def save_plot_region_color(self, cutout=True, Q=10, stretch=0.5, dir=None):
-        if dir:
-            self.dir = dir
-        self.plot_region_color(Q=Q, stretch=stretch)
-        plt.axis("off")
-        plt.savefig(self.dir + f'{self.objid}_region.png')
-        plt.close()
-
-    def save_data(self, dir=None):
-        if dir:
-            self.data_dir = dir
-        if len(self.cutout) == 0:
-            self.cutout = self.data()
-        np.save(self.data_dir + f'{self.objid}', self.cutout)
-
-    def save_data_region(self, dir=None):
-        if dir:
-            self.data_dir = dir
-        np.save(self.data_dir + f'{self.objid}_region', self.image)
-        
