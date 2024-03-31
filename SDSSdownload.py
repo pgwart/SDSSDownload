@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib.colors import LogNorm
 from astroquery.sdss import SDSS
 from astropy import coordinates as coords
 import astropy.units as u
@@ -119,6 +120,7 @@ class Image:
         if band == None:
             band = self.bands[0]
         with fits.open(self.gal_dir + 'cutout_' + band + '.fits') as hdu:
+            norm = LogNorm(np.min(hdu[0].data), np.max(hdu[0].data))
             plt.axis('off')
             fig = plt.imshow(hdu[0].data, norm="log", cmap="binary", origin="lower")
             if save:
@@ -130,6 +132,7 @@ class Image:
         if band == None:
             band = self.bands[0]
         with fits.open(self.gal_dir + 'cutout_' + band + '.fits') as hdu:
+            norm = LogNorm(np.min(hdu[0].data), np.max(hdu[0].data))
             plt.axis('off')
             fig = plt.imshow(hdu[0].data, norm="log", cmap="binary", origin="lower")
             fig.axes.get_xaxis().set_visible(False)
