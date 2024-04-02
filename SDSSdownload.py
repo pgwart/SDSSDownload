@@ -51,6 +51,14 @@ class Image:
         # Get coordinates and SDSS ID
         self.pos = coords.SkyCoord(ra=self.ra, dec=self.dec)
         self.id = SDSS.query_region(self.pos, radius=5*u.arcsec)
+
+        # If no galaxy found, increase search radius until found
+        if type(self.id) == None:
+            radius = 10
+            while type(self.id) == None:
+                print('Warning: no targets found for ' + self.id[:-3] + '. Increasing search radius.')
+                self.id = SDSS.query_region(self.pos, radius=radius*u.arcsec)
+                radius += 5
         
         # Find search result that matches one of our SDSS galaxies
         # else, use the first result
@@ -107,7 +115,7 @@ class Image:
 
             hdu = fits.open(filename)[0]
             wcs = WCS(hdu.header)
-                
+
             try:
                 cutout = Cutout2D(hdu.data, position=self.pos, size=size, wcs=wcs, mode='strict')
             except:
