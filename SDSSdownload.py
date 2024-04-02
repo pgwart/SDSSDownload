@@ -53,12 +53,11 @@ class Image:
         self.id = SDSS.query_region(self.pos, radius=5*u.arcsec)
 
         # If no galaxy found, increase search radius until found
-        if type(self.id) == None:
-            radius = 10
-            while type(self.id) == None:
-                print('Warning: no targets found for ' + self.id[:-3] + '. Increasing search radius.')
-                self.id = SDSS.query_region(self.pos, radius=radius*u.arcsec)
-                radius += 5
+        radius = 10
+        while self.id is None:
+            print('Warning: no targets found for RA=' + str(self.ra) + ', DEC=' + str(self.dec) + '. Increasing search radius.')
+            self.id = SDSS.query_region(self.pos, radius=radius*u.arcsec)
+            radius += 5
         
         # Find search result that matches one of our SDSS galaxies
         # else, use the first result
